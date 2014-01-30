@@ -1,12 +1,10 @@
 # XClipboard.jl: Copy and paste in Julia on XWindows systems
 
-(Actually, only paste is currently implemented.)
-
-This is a partial translation of @edrosten's (x_clipboard)
-[https://github.com/edrosten/x_clipboard] nearly complete
+This is a partial translation of @edrosten's [x_clipboard]
+(https://github.com/edrosten/x_clipboard) nearly complete
 demonstration of how to use the clipboard and drag and drop in X11.
 
-(See also (here)[http://www.edwardrosten.com/code/x11.html] for a nice
+(See also [here](http://www.edwardrosten.com/code/x11.html) for a nice
 overview.)
 
 At this point, only pasting is (mostly) implemented.
