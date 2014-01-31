@@ -14,6 +14,11 @@ rather tedious experience.  It would be great if there were a higher
 level, preferably cross-platform library which took care of this, but
 as of mid-2013, I couldn't find one.
 
+Note that Julia Base has a ``clipboard()`` command that already works for
+text-based copying.  ``xclipboard()`` is meant to allow any kind of 
+data to be pasted, but currently, the parsing of non-text data is up
+to the individual.
+
 # Functions
 
 ```julia
@@ -23,6 +28,11 @@ xclipboard([t1, [t2, ...]])   Get the current contents of the X11
 
 xclipboard_targets()          Get a list of possible target types
                               for the current selection
+
+decodemime(::MIME{mime}, x)   Used to decode a particular target
+                              type.  Currently handles text, and
+                              returns other target types as raw
+                              byte arrays.
 ```
 
 # Example
