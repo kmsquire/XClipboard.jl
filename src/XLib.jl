@@ -1,10 +1,10 @@
 # xlib integration for interacting with the clipboard
 
-#module XLib
+if dlopen_e("libX11") == C_NULL
+    error("X11 not found (required for XClipboard.jl)")
+end
 
-import Base: string
-
-#if dlopen_e("libX11") != C_NULL
+import DataStructures.OrderedDict
 
 export clipboard
 
@@ -151,6 +151,8 @@ function XGetAtomName(disp::Display, a::Atom)
     return rv
 end
 
+XGetAtomName(a::Atom) = XGetAtomName(disp, a)
+
 XConnectionNumber(display::Display) = 
    ccall((:XConnectionNumber, :libX11), Cint, (Display,), display)
 
@@ -204,9 +206,6 @@ function GetWindowProperty(display     ::Display,
                            property    ::Atom,
                            delete      ::Bool = false,
                            req_type    ::Atom = AnyPropertyType)
-    buf = Uint8[]
-    bufp = 1
-
     # query size
 
     prop = XGetWindowProperty(display, w, property, 0, 0, delete, req_type)
@@ -217,43 +216,63 @@ function GetWindowProperty(display     ::Display,
         error("Requested atom ($(XGetAtomName(disp, req_type)) does not exist")
     end
 
+    # This is actually rather screwy.
+
+    # On 64-bit systems (at least), some of the return values are actually 64-bits
+    # However, XLib doesn't actually know anything about 64-bit values,
+    # but instead returns the number of bytes _as_if_ the return values were 32-bits
+    # (Really?!) 
+
+    # Just to be sure, we use prop.format, which is the reported return value size in bits,
+    # and scale by sizeof(Culong)/(prop.format/8), which should be 1 on a 32-bit system
+    # and 2 on a 64-bit system
+
+    # This is at least true for XA_ATOM and XA_TARGETS.
+    # If there are other property types which have the same characteristics, they
+    # they should be added here.
+
+    # See also: http://tronche.com/gui/x/xlib/window-information/XGetWindowProperty.html
+
     if prop._type == XA_ATOM || prop._type == XA_TARGETS
         sz = div(prop.bytes_remaining,(prop.format>>3))*sizeof(Atom)
     else
         sz = prop.bytes_remaining # size in bytes of items read
     end
 
-    # Resize return buffer to correct size in one shot
-    if length(buf) < sz
-        resize!(buf, sz)
-    end
-
     # Do the actual read
+    # Get all data in one shot
+
+    # TODO: this might cause problems very very big copy buffers...
+    # TODO: it might be better to set this up as a feed to an IOBuffer
+
+    # Here, the request size is set as the number of 32-bit items to retrieve.
+    # (Why, Xlib, do you make our life difficult in this way????)
 
     prop = XGetWindowProperty(display, w, property, 0, sz>>2+1, delete, req_type)
 
-    println("sz = $sz")
-    println("bytes remaining = $(prop.bytes_remaining)")
     @assert prop.bytes_remaining == 0
 
     # Copy the data
-    unsafe_copy!(pointer(buf, bufp), prop.data, sz)
-    bufp += sz
+
+    buf = Array(Uint8, sz)
+    unsafe_copy!(pointer(buf), prop.data, sz)
     XFree(prop.data)
 
-    # Should we convert the buffer here or somewhere else
+    return Property(prop._type, buf)
 
-    if prop.format == 8
-        return Property(prop._type, buf)
-    elseif prop.format == 16
-        return Property(prop._type, reinterpret(Uint16, buf))
-    elseif prop.format == 32
-        return Property(prop._type, reinterpret(Uint32, buf))
-    #elseif prop.format == 64            # This doesn't exist yet...
-        #return Property(prop._type, reinterpret(Uint64, buf))
-    else
-        error("Unknown type size: $prop.format")
-    end
+    # # Should we convert the buffer here or somewhere else
+
+    # if prop.format == 8
+    #     return Property(prop._type, buf)
+    # elseif prop.format == 16
+    #     return Property(prop._type, reinterpret(Uint16, buf))
+    # elseif prop.format == 32
+    #     return Property(prop._type, reinterpret(Uint32, buf))
+    # #elseif prop.format == 64            # This doesn't exist yet...
+    #     #return Property(prop._type, reinterpret(Uint64, buf))
+    # else
+    #     error("Unknown type size: $prop.format")
+    # end
 end
 
 
@@ -270,17 +289,14 @@ const sel        = XInternAtom(disp, "CLIPBOARD", false)
 const XA_TARGETS = XInternAtom(disp, "TARGETS", false)
 const XA_ATOM    = convert(Atom,  4) # Xatom.h
 const XA_STRING  = convert(Atom, 31) # Xatom.h
-
-# utility function for converting mime types
-string{T}(::Type{MIME{T}}) = string(T)
+const XA_UTF8_STRING = 0x100|XA_STRING
 
 #
-function pick_target_from_list{U<:ByteString}(disp::Display, atom_list::Vector{Atom}, datatypes::Array{U})
+function pick_target_from_list(disp::Display, atom_list::Vector{Atom}, datatypes::Array)
 
-    atom_names  = [XGetAtomName(disp, atom)=>atom for atom in atom_list]
-
-    for atom in atom_names
-        println(atom)
+    atom_names  = OrderedDict{String,Atom}()
+    for atom in atom_list
+        atom_names[XGetAtomName(disp, atom)] = atom
     end
 
     for d in datatypes
@@ -291,11 +307,13 @@ function pick_target_from_list{U<:ByteString}(disp::Display, atom_list::Vector{A
     return NoneAtom
 end
 
-function pick_target_from_targets{T,U<:ByteString}(disp::Display, p::Property{T}, datatypes::Array{U})
+function pick_target_from_targets(disp::Display, p::Property, datatypes::Array)
     # work around broken implementations
 
     if((p._type != XA_ATOM && p._type != XA_TARGETS) || sizeof(T) != 4)
-        if "STRING" in datatypes
+        if "UTF8_STRING" in datatypes
+            return XA_UTF8_STRING
+        elseif "STRING" in datatypes
             return XA_STRING
         else
             return NoneAtom
@@ -305,55 +323,32 @@ function pick_target_from_targets{T,U<:ByteString}(disp::Display, p::Property{T}
     return pick_target_from_list(disp, reinterpret(Atom, p.data), datatypes)
 end
 
-function clipboard{T<:Union(ByteString,MIME)}(;types::Array{T}=["STRING"])
 
-    datatypes = [string(x) for x in types]
+function xclipboard_request(request_atom::Atom, timeout::Int=2)
 
-    # Ask for the list of targets for the current item on the clipboard
-    XConvertSelection(disp, sel, XA_TARGETS, sel, w, CurrentTime)
+    XConvertSelection(disp, sel, request_atom, sel, w, CurrentTime)
     XFlush(disp)
-
-    to_be_requested = NoneAtom
-    sent_request = false
 
     x11_fd = XConnectionNumber(disp)
 
-    while(true)
+    while true
         # Are any events pending?
         if XPending(disp) == 0
             # poll Xlib with a 2 second timeout)
-            if poll_fd(RawFD(x11_fd), 2, readable=true) == 0
-                return nothing # timeout
+            if poll_fd(RawFD(x11_fd), timeout, readable=true) == 0
+                return Uint8[]
             end
         end
 
         e = XNextEvent(disp)
-        if(e._type == SelectionNotify)  # dispatch based on type instead?
+        
+        e._type != SelectionNotify && continue
+        e.property == NoneAtom && return Uint8[]
+        e.target != request_atom && continue
 
-            if e.property == NoneAtom
-                return nothing
-            end
+        prop = GetWindowProperty(disp, w, sel)
 
-            prop = GetWindowProperty(disp, w, sel)
-
-            if e.target == XA_TARGETS && !sent_request
-                sent_request=true
-                to_be_requested = pick_target_from_targets(disp, prop, datatypes)
-                if(to_be_requested == NoneAtom)
-                    return nothing
-                end
-
-                # request the conversion to our preferred datatype
-                XConvertSelection(disp, sel, to_be_requested, sel, w, CurrentTime)
-                XFlush(disp)
-
-                println("sent request")
-
-            elseif e.target == to_be_requested
-                return prop.data
-            end
-        end
+        return prop.data
     end
-end
+end    
 
-#end
