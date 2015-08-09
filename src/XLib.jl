@@ -1,6 +1,6 @@
 # xlib integration for interacting with the clipboard
 
-if dlopen_e("libX11") == C_NULL
+if Libdl.dlopen_e("libX11") == C_NULL
     error("X11 not found (required for XClipboard.jl)")
 end
 
@@ -22,15 +22,15 @@ typealias Window XID
 const COPYBUF_MAX_SZ = 128*1024 # 128K buffer for copying data
 
 const CurrentTime = zero(Clong)
-const Success =     int32(0)
-const BadRequst =   int32(1)
-const BadValue =    int32(2)
-const BadWindow =   int32(3)
-const BadAtom =     int32(5)
+const Success =     Int32(0)
+const BadRequst =   Int32(1)
+const BadValue =    Int32(2)
+const BadWindow =   Int32(3)
+const BadAtom =     Int32(5)
 
-const NoneAtom =    int32(0)
+const NoneAtom =    Int32(0)
 
-const SelectionNotify = int32(31)
+const SelectionNotify = Int32(31)
 const AnyPropertyType = zero(Atom)
 
 # Event types
